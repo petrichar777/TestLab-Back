@@ -1,0 +1,95 @@
+name: Build & Deploy Backend
+
+# 触发条件：push 到 main 自动构建并部署；也支持在 Actions 页面手动触发
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一时间只允许一个部署任务，避免两次 push 并发替换 jar
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: "17"
+  ARTIFACT_NAME: app-jar
+  JAR_NAME: exam-backend-0.1.0.jar
+  # 服务器上的中转目录（纯 ASCII 路径，规避中文目录在 CI shell 里的编码风险）
+  STAGING_DIR: /www/deploy/exam-backend
+
+jobs:
+  build:
+    name: 构建
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          # 缓存 ~/.m2/repository，后续构建可省下大量依赖下载时间
+          cache: maven
+
+      - name: Maven 构建
+        run: mvn -B -DskipTests clean package
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: target/${{ env.JAR_NAME }}
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: 部署
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码（取 deploy.sh）
+        uses: actions/checkout@v4
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist
+
+      - name: 写入部署私钥
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: 上传 jar 与部署脚本
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          # 先把主机指纹写入 known_hosts，避免首次连接时交互式确认
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          TARGET="$SSH_USER@$SSH_HOST"
+          ssh -p "$SSH_PORT" -i ~/.ssh/deploy_key "$TARGET" "mkdir -p '${{ env.STAGING_DIR }}'"
+          mkdir -p "staging"
+          cp "dist/${{ env.JAR_NAME }}" "staging/app.jar"
+          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key \
+            "staging/app.jar" "deploy/deploy.sh" \
+            "$TARGET:${{ env.STAGING_DIR }}/"
+
+      - name: 执行部署脚本
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh -p "$SSH_PORT" -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" \
+            "bash ${{ env.STAGING_DIR }}/deploy.sh"
