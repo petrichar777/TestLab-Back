@@ -1,0 +1,21 @@
+# Maven 构建输出
+target/
+
+# 本地敏感配置（数据库账号密码、JWT secret 等），请参考 application.yml.example
+src/main/resources/application.yml
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
