@@ -77,12 +77,25 @@ jobs:
           # 先把主机指纹写入 known_hosts，避免首次连接时交互式确认
           ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
           TARGET="$SSH_USER@$SSH_HOST"
-          ssh -p "$SSH_PORT" -i ~/.ssh/deploy_key "$TARGET" "mkdir -p '${{ env.STAGING_DIR }}'"
-          mkdir -p "staging"
-          cp "dist/${{ env.JAR_NAME }}" "staging/app.jar"
-          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key \
-            "staging/app.jar" "deploy/deploy.sh" \
-            "$TARGET:${{ env.STAGING_DIR }}/"
+          # 注意 ssh 用 -p 指定端口，scp 用 -P，两者不能共用同一组参数
+          SSH_OPTS="-p $SSH_PORT -i $HOME/.ssh/deploy_key"
+          SCP_OPTS="-P $SSH_PORT -i $HOME/.ssh/deploy_key"
+
+          ssh $SSH_OPTS "$TARGET" "mkdir -p '${{ env.STAGING_DIR }}'"
+          mkdir -p staging
+          cp "dist/${{ env.JAR_NAME }}" staging/app.jar
+
+          # 用 rsync 增量传输而不是 scp：
+          # fat jar 里 95% 以上是从未变过的依赖库（BOOT-INF/lib），目标端留有一份
+          # 上一版 jar 作为基准文件，rsync 只需传输差异块，可把每次传输量从 61MB
+          # 降到几百 KB。--no-whole-file 强制启用差异算法（远端传输本就是默认行为，
+          # 这里显式写出避免歧义），--stats 会打印实际传输量便于观察效果。
+          rsync -a --no-whole-file --partial --stats \
+            -e "ssh $SSH_OPTS" \
+            staging/app.jar "$TARGET:${{ env.STAGING_DIR }}/app.jar"
+
+          # 部署脚本很小，直接 scp
+          scp $SCP_OPTS deploy/deploy.sh "$TARGET:${{ env.STAGING_DIR }}/deploy.sh"
 
       - name: 执行部署脚本
         env:
