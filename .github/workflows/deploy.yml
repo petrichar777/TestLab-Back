@@ -87,10 +87,12 @@ jobs:
 
           # 用 rsync 增量传输而不是 scp：
           # fat jar 里 95% 以上是从未变过的依赖库（BOOT-INF/lib），目标端留有一份
-          # 上一版 jar 作为基准文件，rsync 只需传输差异块，可把每次传输量从 61MB
+          # 上一版 jar 作为基准文件，rsync 只需传输差异块，可把每次传输量从 71MB
           # 降到几百 KB。--no-whole-file 强制启用差异算法（远端传输本就是默认行为，
           # 这里显式写出避免歧义），--stats 会打印实际传输量便于观察效果。
-          rsync -a --no-whole-file --partial --stats \
+          # --no-owner/--no-group：不要保留源文件属主。runner 上的文件属于 UID 1001，
+          # 而服务器上 UID 1001 是别的用户，保留会导致基准文件属主变成无意义的账号。
+          rsync -a --no-owner --no-group --no-whole-file --partial --stats \
             -e "ssh $SSH_OPTS" \
             staging/app.jar "$TARGET:${{ env.STAGING_DIR }}/app.jar"
 
