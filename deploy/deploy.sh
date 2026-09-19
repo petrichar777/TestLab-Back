@@ -43,6 +43,23 @@ BACKUP_DIR="${APP_DIR}/backups"
 log()  { echo "[deploy $(date '+%F %T')] $*"; }
 fail() { log "错误：$*"; exit 1; }
 
+# ---------------- 选择 UTF-8 locale ----------------
+# java 用 sun.jnu.encoding 解码命令行里的文件路径，而该值取自 LANG/LC_ALL。
+# GitHub Actions 的 ssh 会话默认不传递 locale，LANG 为空时 JVM 会退化成 ASCII，
+# 于是中文目录被逐字节解码成 "?"，最终报错：
+#   Error: An unexpected error occurred while trying to open file
+#          /www/wwwroot/????????????/exam-backend-0.1.0.jar
+# 手动在交互式终端执行时 LANG 有值，所以不会复现。这里显式选一个系统可用的
+# UTF-8 locale，启动时导出给子进程。
+UTF8_LOCALE=""
+for candidate in zh_CN.UTF-8 en_US.UTF-8 C.UTF-8 C.utf8; do
+    if locale -a 2>/dev/null | grep -qix "${candidate}"; then
+        UTF8_LOCALE="${candidate}"
+        break
+    fi
+done
+[ -n "${UTF8_LOCALE}" ] || fail "系统上找不到可用的 UTF-8 locale，无法以中文路径启动 java"
+
 # ---------------- 停止 ----------------
 stop_app() {
     if pgrep -u "${RUN_USER}" -f "${PROC_PATTERN}" >/dev/null 2>&1; then
@@ -72,8 +89,9 @@ start_app() {
     mkdir -p "${LOG_DIR}"
     mkdir -p "$(dirname "${PID_FILE}")"
 
-    log "启动应用（用户 ${RUN_USER}，日志 ${LOG_FILE}）"
+    log "启动应用（用户 ${RUN_USER}，locale ${UTF8_LOCALE}，日志 ${LOG_FILE}）"
     su -s /bin/bash -c "
+        export LANG='${UTF8_LOCALE}' LC_ALL='${UTF8_LOCALE}'
         cd '${APP_DIR}' || exit 1
         [ -f '${ENV_FILE}' ] && . '${ENV_FILE}'
         nohup '${JAVA}' -jar ${JVM_ARGS} '${JAR}' >> '${LOG_FILE}' 2>&1 &
